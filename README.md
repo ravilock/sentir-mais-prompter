@@ -9,7 +9,7 @@ Python API service for prompt execution in Sentir Mais.
 - authenticates inter-service calls with a simple API key
 - forwards requests to a backing LLM provider through a provider abstraction
 
-The first provider implementation is OpenAI-compatible and is configured for OpenRouter by default.
+The provider layer supports both OpenAI-compatible backends and a local Ollama backend.
 
 ## Run locally
 
@@ -81,6 +81,35 @@ Default LLM provider settings:
 - `LLM_PROVIDER=openrouter`
 - `LLM_BASE_URL=https://openrouter.ai/api/v1`
 - `DEFAULT_MODEL=openrouter/auto`
+
+### Local Ollama mode
+
+Set `LOCAL_LLM=true` to route generation to a local Ollama instance instead of OpenRouter.
+
+Defaults in local mode:
+
+- `LLM_PROVIDER=ollama`
+- `LLM_BASE_URL=http://127.0.0.1:11434`
+- `DEFAULT_MODEL=qwen2.5:7b`
+
+Recommended local model for this project:
+
+- `qwen2.5:7b`
+
+Reason:
+
+- it is available in Ollama at about 4.7GB
+- it is a good fit for structured JSON extraction and instruction following
+- it is conservative enough to run comfortably on a 32GB RAM machine even if GPU acceleration is unavailable
+
+Example setup:
+
+```bash
+ollama pull qwen2.5:7b
+export LOCAL_LLM=true
+export API_KEY=sentir-mais-local-prompter-key
+sentir-mais-prompter
+```
 
 ## API
 

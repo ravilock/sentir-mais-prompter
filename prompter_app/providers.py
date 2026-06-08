@@ -83,10 +83,68 @@ class OpenAICompatibleProvider:
         )
 
 
+class OllamaProvider:
+    def __init__(self, settings: Settings, http_client: httpx.Client | None = None) -> None:
+        self._settings = settings
+        self._http_client = http_client or httpx.Client(timeout=settings.request_timeout_seconds)
+
+    def generate(self, request: GenerateRequest) -> ProviderGenerateResult:
+        if request.model and not self._settings.allow_model_override:
+            raise ProviderError("model override is disabled")
+
+        payload: dict[str, Any] = {
+            "model": request.model or self._settings.default_model,
+            "messages": [message.model_dump() for message in request.messages],
+            "stream": False,
+            "options": {
+                "temperature": request.temperature,
+            },
+        }
+
+        if request.response_format.type == "json_object":
+            payload["format"] = "json"
+
+        if request.max_tokens is not None:
+            payload["options"]["num_predict"] = request.max_tokens
+
+        response = self._http_client.post(
+            f"{self._settings.llm_base_url.rstrip('/')}/api/chat",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        if response.status_code < 200 or response.status_code >= 300:
+            raise ProviderError(f"provider returned status {response.status_code}: {response.text}")
+
+        body = response.json()
+        message = body.get("message") or {}
+        content = _extract_message_content(message.get("content"))
+        if not content:
+            raise ProviderError("provider response did not include assistant content")
+
+        prompt_eval_count = body.get("prompt_eval_count", 0)
+        eval_count = body.get("eval_count", 0)
+
+        return ProviderGenerateResult(
+            provider="ollama",
+            model=body.get("model") or payload["model"],
+            output_text=content,
+            finish_reason=body.get("done_reason"),
+            usage=Usage(
+                prompt_tokens=prompt_eval_count,
+                completion_tokens=eval_count,
+                total_tokens=prompt_eval_count + eval_count,
+            ),
+            request_id=None,
+            raw_response=body,
+        )
+
+
 def build_provider(settings: Settings) -> PromptProvider:
     provider = settings.llm_provider.strip().lower()
     if provider in {"openrouter", "openai-compatible", "openai_compatible"}:
         return OpenAICompatibleProvider(settings)
+    if provider == "ollama":
+        return OllamaProvider(settings)
 
     raise ValueError(f"unsupported LLM_PROVIDER: {settings.llm_provider}")
 
