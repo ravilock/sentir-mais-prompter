@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Protocol
 
 import httpx
@@ -24,7 +25,7 @@ class PromptProvider(Protocol):
 class OpenAICompatibleProvider:
     def __init__(self, settings: Settings, http_client: httpx.Client | None = None) -> None:
         self._settings = settings
-        self._http_client = http_client or httpx.Client(timeout=settings.request_timeout_seconds)
+        self._http_client = http_client or _build_http_client(settings)
 
     def generate(self, request: GenerateRequest) -> ProviderGenerateResult:
         if not self._settings.llm_api_key:
@@ -63,6 +64,7 @@ class OpenAICompatibleProvider:
         )
 
         try:
+            started_at = time.monotonic()
             response = self._http_client.post(
                 f"{self._settings.llm_base_url.rstrip('/')}/chat/completions",
                 json=payload,
@@ -70,10 +72,11 @@ class OpenAICompatibleProvider:
             )
         except httpx.HTTPError as error:
             logger.exception(
-                "openai-compatible provider request transport failure provider=%s base_url=%s error_type=%s summary=%s",
+                "openai-compatible provider request transport failure provider=%s base_url=%s error_type=%s duration_ms=%s summary=%s",
                 self._settings.llm_provider,
                 self._settings.llm_base_url,
                 type(error).__name__,
+                _elapsed_ms(started_at),
                 json.dumps(request_summary, sort_keys=True),
             )
             raise ProviderError(f"provider request failed: {type(error).__name__}: {error}") from error
@@ -82,11 +85,12 @@ class OpenAICompatibleProvider:
             upstream_request_id = _extract_upstream_request_id(response)
             response_preview = _truncate_text(response.text)
             logger.error(
-                "openai-compatible provider returned non-success status provider=%s base_url=%s status_code=%s upstream_request_id=%s summary=%s response_preview=%s",
+                "openai-compatible provider returned non-success status provider=%s base_url=%s status_code=%s upstream_request_id=%s duration_ms=%s summary=%s response_preview=%s",
                 self._settings.llm_provider,
                 self._settings.llm_base_url,
                 response.status_code,
                 upstream_request_id or "unknown",
+                _elapsed_ms(started_at),
                 json.dumps(request_summary, sort_keys=True),
                 response_preview,
             )
@@ -101,11 +105,12 @@ class OpenAICompatibleProvider:
             upstream_request_id = _extract_upstream_request_id(response)
             response_preview = _truncate_text(response.text)
             logger.exception(
-                "openai-compatible provider returned invalid JSON provider=%s base_url=%s status_code=%s upstream_request_id=%s summary=%s response_preview=%s",
+                "openai-compatible provider returned invalid JSON provider=%s base_url=%s status_code=%s upstream_request_id=%s duration_ms=%s summary=%s response_preview=%s",
                 self._settings.llm_provider,
                 self._settings.llm_base_url,
                 response.status_code,
                 upstream_request_id or "unknown",
+                _elapsed_ms(started_at),
                 json.dumps(request_summary, sort_keys=True),
                 response_preview,
             )
@@ -123,6 +128,17 @@ class OpenAICompatibleProvider:
             raise ProviderError("provider response did not include assistant content")
 
         usage = body.get("usage") or {}
+        upstream_request_id = _extract_upstream_request_id(response)
+        logger.info(
+            "openai-compatible provider request completed provider=%s base_url=%s status_code=%s upstream_request_id=%s duration_ms=%s summary=%s usage=%s",
+            self._settings.llm_provider,
+            self._settings.llm_base_url,
+            response.status_code,
+            upstream_request_id or "unknown",
+            _elapsed_ms(started_at),
+            json.dumps(request_summary, sort_keys=True),
+            json.dumps(usage, sort_keys=True),
+        )
         return ProviderGenerateResult(
             provider=self._settings.llm_provider,
             model=body.get("model") or payload["model"],
@@ -141,7 +157,7 @@ class OpenAICompatibleProvider:
 class OllamaProvider:
     def __init__(self, settings: Settings, http_client: httpx.Client | None = None) -> None:
         self._settings = settings
-        self._http_client = http_client or httpx.Client(timeout=settings.request_timeout_seconds)
+        self._http_client = http_client or _build_http_client(settings)
 
     def generate(self, request: GenerateRequest) -> ProviderGenerateResult:
         if request.model and not self._settings.allow_model_override:
@@ -170,6 +186,7 @@ class OllamaProvider:
         )
 
         try:
+            started_at = time.monotonic()
             response = self._http_client.post(
                 f"{self._settings.llm_base_url.rstrip('/')}/api/chat",
                 json=payload,
@@ -177,9 +194,10 @@ class OllamaProvider:
             )
         except httpx.HTTPError as error:
             logger.exception(
-                "ollama provider request transport failure base_url=%s error_type=%s summary=%s",
+                "ollama provider request transport failure base_url=%s error_type=%s duration_ms=%s summary=%s",
                 self._settings.llm_base_url,
                 type(error).__name__,
+                _elapsed_ms(started_at),
                 json.dumps(request_summary, sort_keys=True),
             )
             raise ProviderError(f"provider request failed: {type(error).__name__}: {error}") from error
@@ -188,10 +206,11 @@ class OllamaProvider:
             upstream_request_id = _extract_upstream_request_id(response)
             response_preview = _truncate_text(response.text)
             logger.error(
-                "ollama provider returned non-success status base_url=%s status_code=%s upstream_request_id=%s summary=%s response_preview=%s",
+                "ollama provider returned non-success status base_url=%s status_code=%s upstream_request_id=%s duration_ms=%s summary=%s response_preview=%s",
                 self._settings.llm_base_url,
                 response.status_code,
                 upstream_request_id or "unknown",
+                _elapsed_ms(started_at),
                 json.dumps(request_summary, sort_keys=True),
                 response_preview,
             )
@@ -206,10 +225,11 @@ class OllamaProvider:
             upstream_request_id = _extract_upstream_request_id(response)
             response_preview = _truncate_text(response.text)
             logger.exception(
-                "ollama provider returned invalid JSON base_url=%s status_code=%s upstream_request_id=%s summary=%s response_preview=%s",
+                "ollama provider returned invalid JSON base_url=%s status_code=%s upstream_request_id=%s duration_ms=%s summary=%s response_preview=%s",
                 self._settings.llm_base_url,
                 response.status_code,
                 upstream_request_id or "unknown",
+                _elapsed_ms(started_at),
                 json.dumps(request_summary, sort_keys=True),
                 response_preview,
             )
@@ -224,6 +244,20 @@ class OllamaProvider:
 
         prompt_eval_count = body.get("prompt_eval_count", 0)
         eval_count = body.get("eval_count", 0)
+        logger.info(
+            "ollama provider request completed base_url=%s status_code=%s duration_ms=%s summary=%s usage=%s",
+            self._settings.llm_base_url,
+            response.status_code,
+            _elapsed_ms(started_at),
+            json.dumps(request_summary, sort_keys=True),
+            json.dumps(
+                {
+                    "prompt_eval_count": prompt_eval_count,
+                    "eval_count": eval_count,
+                },
+                sort_keys=True,
+            ),
+        )
 
         return ProviderGenerateResult(
             provider="ollama",
@@ -311,3 +345,22 @@ def _truncate_text(value: str, limit: int = 1000) -> str:
     if len(normalized) <= limit:
         return normalized
     return f"{normalized[:limit]}..."
+
+
+def _build_http_client(settings: Settings) -> httpx.Client:
+    timeout = httpx.Timeout(
+        timeout=settings.request_timeout_seconds,
+        connect=settings.connect_timeout_seconds,
+        read=settings.request_timeout_seconds,
+        write=settings.request_timeout_seconds,
+        pool=settings.pool_timeout_seconds,
+    )
+    limits = httpx.Limits(
+        max_connections=settings.max_connections,
+        max_keepalive_connections=settings.max_keepalive_connections,
+    )
+    return httpx.Client(timeout=timeout, limits=limits)
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.monotonic() - started_at) * 1000)

@@ -38,6 +38,7 @@ class Settings:
     app_name: str = "sentir-mais-prompter"
     host: str = field(default_factory=lambda: os.getenv("HOST", "0.0.0.0"))
     port: int = field(default_factory=lambda: int(os.getenv("PORT", "8020")))
+    log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
     api_key: str = field(default_factory=lambda: os.getenv("API_KEY", ""))
     local_llm: bool = field(default_factory=lambda: _env_bool("LOCAL_LLM", False))
     llm_provider: str = field(default_factory=_default_llm_provider)
@@ -46,6 +47,16 @@ class Settings:
     default_model: str = field(default_factory=_default_model)
     request_timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
+    )
+    connect_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("CONNECT_TIMEOUT_SECONDS", "10"))
+    )
+    pool_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("POOL_TIMEOUT_SECONDS", "10"))
+    )
+    max_connections: int = field(default_factory=lambda: int(os.getenv("MAX_CONNECTIONS", "100")))
+    max_keepalive_connections: int = field(
+        default_factory=lambda: int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
     )
     app_url: str | None = field(default_factory=lambda: os.getenv("APP_URL") or None)
     app_title: str | None = field(

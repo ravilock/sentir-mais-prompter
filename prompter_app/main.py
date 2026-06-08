@@ -1,20 +1,63 @@
 from __future__ import annotations
 
 import logging
+import time
+from uuid import uuid4
 from json import dumps
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 
 from prompter_app.providers import ProviderError, build_provider
 from prompter_app.schemas import GenerateRequest, GenerateResponse, HealthResponse
 from prompter_app.settings import Settings
 
 settings = Settings()
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 provider = build_provider(settings)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title=settings.app_name)
+
+
+@app.middleware("http")
+async def log_http_requests(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Amzn-Trace-Id") or uuid4().hex
+    started_at = time.monotonic()
+    client = request.client.host if request.client else "unknown"
+    logger.info(
+        "http request started request_id=%s method=%s path=%s client=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        client,
+    )
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "http request failed request_id=%s method=%s path=%s duration_ms=%s",
+            request_id,
+            request.method,
+            request.url.path,
+            int((time.monotonic() - started_at) * 1000),
+        )
+        raise
+
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "http request completed request_id=%s method=%s path=%s status_code=%s duration_ms=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        int((time.monotonic() - started_at) * 1000),
+    )
+    return response
 
 
 def require_api_key(authorization: str | None = Header(default=None)) -> None:
@@ -92,6 +135,18 @@ async def generate(
 
 
 def run() -> None:
+    logger.info(
+        "starting prompter service provider=%s base_url=%s model=%s timeout_seconds=%s connect_timeout_seconds=%s pool_timeout_seconds=%s max_connections=%s max_keepalive_connections=%s log_level=%s",
+        settings.llm_provider,
+        settings.llm_base_url,
+        settings.default_model,
+        settings.request_timeout_seconds,
+        settings.connect_timeout_seconds,
+        settings.pool_timeout_seconds,
+        settings.max_connections,
+        settings.max_keepalive_connections,
+        settings.log_level,
+    )
     uvicorn.run(
         "prompter_app.main:app",
         host=settings.host,
